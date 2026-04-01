@@ -25,7 +25,7 @@ def build_application() -> Application:
     conversation = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url),# старт или сразу ссылка от пользователя
         ],
         states={
             WAITING_URL: [
@@ -42,7 +42,7 @@ def build_application() -> Application:
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
-        allow_reentry=True,
+        allow_reentry=False, # allow_reentry=True Это означало: «Если придёт любой текст — переходи в начальный режим, даже если ты уже внутри диалога».
     )
 
     application.add_handler(conversation)

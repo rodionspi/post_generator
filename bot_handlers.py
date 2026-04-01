@@ -1,6 +1,6 @@
-import asyncio
 import logging
 import re
+import asyncio
 
 import requests
 from telegram import Update
@@ -144,6 +144,7 @@ async def regenerate_post(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def request_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    #update — объект с информацией о том что прислал пользователь (сообщение, нажатие кнопки и т.д.)
     query = update.callback_query
     if query is None or query.message is None:
         return WAITING_URL
