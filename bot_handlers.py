@@ -64,6 +64,20 @@ def _normalize_channel_input(text: str) -> int | str | None:
     return None
 
 
+async def _is_user_channel_admin(
+    context: ContextTypes.DEFAULT_TYPE,
+    channel_id: int | str,
+    user_id: int,
+) -> bool | None:
+    try:
+        member = await context.bot.get_chat_member(chat_id=channel_id, user_id=user_id)
+    except TelegramError:
+        LOGGER.exception("Не удалось проверить права пользователя %s в канале %s", user_id, channel_id)
+        return None
+
+    return member.status in {"administrator", "creator"}
+
+
 def _welcome_message(channel_id: int | str) -> str:
     return (
         "Привет! Я помогу быстро подготовить пост и опубликовать его в ваш Telegram-канал.\n\n"
@@ -343,6 +357,27 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return WAITING_URL
 
     target_channel = _get_target_channel(context)
+    user = update.effective_user
+    if user is None:
+        await query.message.reply_text(
+            "Не удалось определить пользователя. Попробуйте снова чуть позже."
+        )
+        return WAITING_URL
+
+    is_admin = await _is_user_channel_admin(context, target_channel, user.id)
+    print(f"Is admin: {is_admin}")
+    if is_admin is None:
+        await query.message.reply_text(
+            "Не удалось проверить ваши права в выбранном канале. Проверьте, что бот добавлен в канал "
+            "и назначен администратором, а затем попробуйте снова."
+        )
+        return WAITING_URL
+
+    if not is_admin:
+        await query.message.reply_text(
+            "Публикация запрещена: только администратор выбранного канала может публиковать посты через бота."
+        )
+        return WAITING_URL
 
     try:
         await publish_to_channel(
