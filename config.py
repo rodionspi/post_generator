@@ -6,7 +6,7 @@ import warnings
 from dotenv import load_dotenv
 from telegram.warnings import PTBUserWarning
 
-WAITING_URL, WAITING_EDIT = range(2)
+WAITING_URL, WAITING_EDIT, WAITING_CHANNEL = range(3)
 MAX_SOURCE_TEXT_LEN = 3000
 GROQ_MODEL = "llama-3.3-70b-versatile"
 

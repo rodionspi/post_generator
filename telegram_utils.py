@@ -20,8 +20,17 @@ def preview_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("✅ Опубликовать", callback_data="publish"),
                 InlineKeyboardButton("🔄 Перегенерировать", callback_data="regenerate"),
             ],
-            [InlineKeyboardButton("✏️ Изменить", callback_data="edit")],
+            [
+                InlineKeyboardButton("✏️ Изменить", callback_data="edit"),
+                InlineKeyboardButton("⚙️ Канал", callback_data="change_channel"),
+            ],
         ]
+    )
+
+
+def settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⚙️ Сменить канал публикации", callback_data="change_channel")]]
     )
 
 

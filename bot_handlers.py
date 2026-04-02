@@ -7,12 +7,18 @@ from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from config import CHANNEL_ID, WAITING_EDIT, WAITING_URL
+from config import CHANNEL_ID, WAITING_CHANNEL, WAITING_EDIT, WAITING_URL
 from generator_service import generate_post
 from parser_service import parse_page
-from telegram_utils import edit_preview_message, publish_to_channel, send_preview
+from telegram_utils import (
+    edit_preview_message,
+    publish_to_channel,
+    send_preview,
+    settings_keyboard,
+)
 
 LOGGER = logging.getLogger(__name__)
+CHANNEL_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 
 
 def _extract_url(text: str) -> str | None:
@@ -20,6 +26,60 @@ def _extract_url(text: str) -> str | None:
     if not match:
         return None
     return match.group(0).strip()
+
+
+def _channel_display(channel_id: int | str) -> str:
+    return str(channel_id)
+
+
+def _get_target_channel(context: ContextTypes.DEFAULT_TYPE) -> int | str:
+    value = context.user_data.get("target_channel_id")
+    if isinstance(value, (int, str)):
+        return value
+    context.user_data["target_channel_id"] = CHANNEL_ID
+    return CHANNEL_ID
+
+
+def _normalize_channel_input(text: str) -> int | str | None:
+    raw = text.strip()
+    if not raw:
+        return None
+
+    if re.fullmatch(r"-?\d+", raw):
+        return int(raw)
+
+    if raw.startswith("@"): 
+        username = raw[1:]
+        if CHANNEL_USERNAME_RE.fullmatch(username):
+            return f"@{username}"
+        return None
+
+    url_match = re.match(r"https?://t\.me/([A-Za-z][A-Za-z0-9_]{4,31})(?:$|[/?#])", raw)
+    if url_match:
+        return f"@{url_match.group(1)}"
+
+    if CHANNEL_USERNAME_RE.fullmatch(raw):
+        return f"@{raw}"
+
+    return None
+
+
+def _welcome_message(channel_id: int | str) -> str:
+    return (
+        "Привет! Я помогу быстро подготовить пост и опубликовать его в ваш Telegram-канал.\n\n"
+        "Что я умею:\n"
+        "1) Разбирать страницу по ссылке и вытаскивать полезные факты.\n"
+        "2) Генерировать готовый черновик поста.\n"
+        "3) Перегенерировать текст по кнопке.\n"
+        "4) Вносить правки по вашей инструкции.\n"
+        "5) Публиковать пост в выбранный канал.\n\n"
+        f"Текущий канал публикации: {_channel_display(channel_id)}\n\n"
+        "Как пользоваться:\n"
+        "1) Отправьте ссылку на страницу.\n"
+        "2) Дождитесь предпросмотра.\n"
+        "3) Нажмите «Изменить», «Перегенерировать» или «Опубликовать».\n"
+        "4) Если нужен другой канал, нажмите «Сменить канал публикации»."
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -30,10 +90,83 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Этот бот работает только в личных сообщениях.")
         return WAITING_URL
 
+    target_channel = _get_target_channel(context)
     context.user_data.clear()
+    context.user_data["target_channel_id"] = target_channel
     await update.message.reply_text(
-        "Привет! Пришлите ссылку на страницу, и я подготовлю пост для Telegram-канала."
+        _welcome_message(target_channel),
+        reply_markup=settings_keyboard(),
     )
+    return WAITING_URL
+
+
+async def request_channel_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.effective_chat is None:
+        return WAITING_URL
+
+    channel_id = _get_target_channel(context)
+    text = (
+        f"Текущий канал публикации: {_channel_display(channel_id)}\n\n"
+        "Отправьте новый канал одним сообщением. Поддерживаются форматы:\n"
+        "• @username\n"
+        "• username\n"
+        "• https://t.me/username\n"
+        "• числовой id, например -1001234567890\n\n"
+        "Чтобы отменить, отправьте: отмена"
+    )
+    if context.user_data.get("draft"):
+        text += "\n\nПосле смены канала можно сразу нажать «Опубликовать» на последнем предпросмотре."
+
+    if update.callback_query and update.callback_query.message:
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text(text)
+        return WAITING_CHANNEL
+
+    if update.message:
+        await update.message.reply_text(text)
+        return WAITING_CHANNEL
+
+    return WAITING_URL
+
+
+async def apply_channel_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.effective_chat is None or update.message is None:
+        return WAITING_CHANNEL
+
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Пожалуйста, используйте бота в личном чате.")
+        return WAITING_CHANNEL
+
+    raw_value = (update.message.text or "").strip()
+    if not raw_value:
+        await update.message.reply_text("Отправьте значение канала одним сообщением.")
+        return WAITING_CHANNEL
+
+    if raw_value.lower() in {"отмена", "cancel"}:
+        await update.message.reply_text(
+            f"Смену канала отменил. Текущий канал: {_channel_display(_get_target_channel(context))}."
+        )
+        return WAITING_URL
+
+    normalized = _normalize_channel_input(raw_value)
+    if normalized is None:
+        await update.message.reply_text(
+            "Не удалось распознать канал. Отправьте @username, username, "
+            "ссылку https://t.me/username или числовой id вида -1001234567890."
+        )
+        return WAITING_CHANNEL
+
+    context.user_data["target_channel_id"] = normalized
+    if context.user_data.get("draft"):
+        await update.message.reply_text(
+            f"Канал обновлен: {_channel_display(normalized)}.\n"
+            "Черновик уже готов: нажмите «Опубликовать» на последнем предпросмотре."
+        )
+    else:
+        await update.message.reply_text(
+            f"Канал обновлен: {_channel_display(normalized)}.\n"
+            "Теперь отправьте ссылку на страницу для генерации поста."
+        )
     return WAITING_URL
 
 
@@ -209,29 +342,35 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await query.message.reply_text("Нет черновика для публикации. Сначала отправьте ссылку.")
         return WAITING_URL
 
+    target_channel = _get_target_channel(context)
+
     try:
         await publish_to_channel(
             context=context,
-            channel_id=CHANNEL_ID,
+            channel_id=target_channel,
             post_text=str(draft),
             image_url=context.user_data.get("image_url"),
         )
     except TelegramError:
         LOGGER.exception("Ошибка публикации в канал")
         await query.message.reply_text(
-            "Не удалось опубликовать пост. Проверьте, что бот добавлен в канал "
+            "Не удалось опубликовать пост в выбранный канал. Проверьте, что бот добавлен в канал "
             "и назначен администратором с правом публикации сообщений."
         )
         return WAITING_URL
 
-    await query.message.reply_text("Пост успешно опубликован в канал.")
+    await query.message.reply_text(
+        f"Пост успешно опубликован в канал {_channel_display(target_channel)}."
+    )
     return WAITING_URL
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    target_channel = _get_target_channel(context)
     if update.message:
         await update.message.reply_text(
             "Остановил текущий сценарий. Пришлите новую ссылку, когда будете готовы."
         )
     context.user_data.clear()
+    context.user_data["target_channel_id"] = target_channel
     return WAITING_URL
